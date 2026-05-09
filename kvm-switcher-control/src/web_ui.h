@@ -10,9 +10,34 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='10' y='20' width='80' height='60' rx='8' fill='%231a1a1f' stroke='%23555' stroke-width='4'/><circle cx='35' cy='50' r='12' fill='%231D9E75'/><circle cx='65' cy='50' r='12' fill='%237F77DD'/></svg>">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#111;color:#ccc;min-height:100vh;display:flex;justify-content:center;align-items:center}
-  .card{background:#1a1a1f;border:1px solid #2a2a30;border-radius:12px;padding:1.5rem;max-width:400px;width:92%}
-  @media(max-width:440px){.card{width:100%;border-radius:0;border-left:none;border-right:none;padding:1.25rem}body{align-items:flex-start}}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#111;color:#ccc;min-height:100vh;display:flex;justify-content:center;align-items:safe center;padding:1rem 0}
+  .card{background:#1a1a1f;border:1px solid #2a2a30;border-radius:12px;padding:1.5rem;max-width:440px;width:92%}
+  /* Touch / mobile: keep the centred-card look, just scale typography and tap
+     targets up so nothing requires a pinch-to-zoom. Triggered by a coarse
+     pointer OR a narrow viewport so it catches Pixel-class devices that
+     report a >440 CSS-px viewport but are still touch-driven. */
+  @media (pointer:coarse), (max-width:768px){
+    .card{padding:1.5rem;max-width:480px}
+    .top h1{font-size:18px}
+    .sw{padding:22px 8px}
+    .sw .n{font-size:32px}
+    .sw .l{font-size:15px;margin-top:5px}
+    .mon{padding:16px}
+    .mon-name,.mon-input{font-size:16px}
+    .mon-dot{width:9px;height:9px}
+    .tag{font-size:14px;padding:7px 14px}
+    .hk-label{font-size:14px}
+    .hk-val{font-size:14px;padding:6px 12px}
+    .btn{padding:16px;font-size:17px}
+    .btn-secondary{font-size:15px;padding:13px}
+    .hk-form p{font-size:14px}
+    .hk-input{font-size:16px;padding:14px}
+    .field label{flex:0 0 90px;font-size:14px}
+    .field input{font-size:15px;padding:11px 13px}
+    details.settings summary{font-size:15px;padding:13px 15px}
+    .wifi-row{font-size:14px;padding:10px 13px}
+    .foot{font-size:13px}
+  }
   .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem}
   .top h1{font-size:14px;font-weight:500;color:#888;letter-spacing:.06em;text-transform:uppercase}
   .dot{width:8px;height:8px;border-radius:50%;transition:all .3s}
@@ -45,6 +70,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   .tag{font-size:11px;padding:4px 10px;border-radius:6px;letter-spacing:.02em}
   .t-awake{background:#0F2D24;color:#5DCAA5}
   .t-asleep{background:#2D2106;color:#EF9F27}
+  .t-off{background:#1a1a20;color:#666}
+  .t-down{background:#2a1418;color:#cc7a82}
   .hk-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem}
   .hk-label{font-size:11px;color:#555}
   .hk-val{font-size:11px;color:#888;background:#111115;border-radius:5px;padding:3px 8px;font-family:monospace}
@@ -52,6 +79,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   .btn:hover{background:#30303c}
   .btn:active{background:#1a1a24}
   .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn-row{display:flex;gap:6px}
+  .btn-row .btn{flex:1}
+  .btn-secondary{background:#1a1a24;border-color:#2a2a34;color:#888;font-size:12px;padding:9px}
+  .btn-secondary:hover{background:#22222e;color:#aaa}
   details.settings{margin-top:10px;border:1px solid #2a2a30;border-radius:8px;overflow:hidden}
   details.settings summary{padding:9px 12px;font-size:12px;color:#666;cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;justify-content:space-between}
   details.settings summary::-webkit-details-marker{display:none}
@@ -117,12 +148,16 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
   <div class="tags">
     <span class="tag t-asleep" id="sleepTag">--</span>
+    <span class="tag t-off" id="pcTag">--</span>
   </div>
   <div class="hk-row">
     <span class="hk-label">Hotkey</span>
     <span class="hk-val" id="hotkeyDisplay">--</span>
   </div>
   <button class="btn" id="switchBtn" onclick="doSwitch()">Switch input</button>
+  <div class="btn-row" style="margin-top:6px">
+    <button class="btn btn-secondary" id="wakeBtn" onclick="doWake()">Wake current PC</button>
+  </div>
   <details class="settings">
     <summary>Hotkey settings</summary>
     <div class="hk-form">
@@ -303,6 +338,20 @@ function setInput(n) {
   fetch('/api/input/' + n).then(function(r) { return r.json(); })
     .then(function() { setTimeout(poll, 600); }).catch(function() {});
 }
+function doWake() {
+  var b = document.getElementById('wakeBtn');
+  var prev = b.textContent;
+  b.disabled = true; b.textContent = 'Waking…';
+  fetch('/api/wake', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .catch(function() {})
+    .finally(function() {
+      setTimeout(function() {
+        b.disabled = false; b.textContent = prev;
+        poll();
+      }, 1500);
+    });
+}
 function poll() {
   fetch('/api/status').then(function(r) { return r.json(); }).then(function(d) {
     var i = d.input;
@@ -321,6 +370,16 @@ function poll() {
     var st = document.getElementById('sleepTag');
     st.textContent = d.monitors_awake ? 'Monitors awake' : 'Monitors asleep';
     st.className = 'tag ' + (d.monitors_awake ? 't-awake' : 't-asleep');
+    var pc = document.getElementById('pcTag');
+    if (!d.hid_link_up) {
+      pc.textContent = 'Link down'; pc.className = 'tag t-down';
+    } else if (!d.usb_mounted) {
+      pc.textContent = 'PC off';   pc.className = 'tag t-off';
+    } else if (d.usb_suspended) {
+      pc.textContent = 'PC asleep'; pc.className = 'tag t-asleep';
+    } else {
+      pc.textContent = 'PC awake';  pc.className = 'tag t-awake';
+    }
     if (d.uptime) {
       var m = Math.floor(d.uptime / 60);
       var h = Math.floor(m / 60);

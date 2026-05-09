@@ -10,6 +10,11 @@
 namespace LinkMsg {
     constexpr uint8_t KEYBOARD       = 0x01;  // 8-byte boot keyboard report
     constexpr uint8_t CONSUMER       = 0x02;  // 2-byte consumer-control report (LE)
+    constexpr uint8_t SYSTEM         = 0x03;  // 2-byte system-control usage code (LE)
+                                              //   0x81 = System Power Down
+                                              //   0x82 = System Sleep
+                                              //   0x83 = System Wake Up
+                                              //   0x00 = release
     constexpr uint8_t LOG            = 0x10;  // ESP32 -> RP2350 debug log line
     constexpr uint8_t USB_STATUS     = 0x20;  // RP2350 -> ESP32 USB-to-PC state
     constexpr uint8_t HEARTBEAT      = 0x21;  // RP2350 -> ESP32 1Hz keepalive
@@ -37,6 +42,10 @@ bool hidLinkSendKeyboard(const uint8_t report[8]);
 
 // Send a 2-byte consumer-control report (little-endian usage code).
 bool hidLinkSendConsumer(uint16_t usage_code);
+
+// Send a system-control usage code (Generic Desktop page).
+//   0x81 Power Down, 0x82 Sleep, 0x83 Wake Up, 0x00 release.
+bool hidLinkSendSystem(uint16_t usage_code);
 
 // Send a UTF-8 log line. Truncated to 200 bytes. No trailing newline needed.
 void hidLinkLog(const char* msg);

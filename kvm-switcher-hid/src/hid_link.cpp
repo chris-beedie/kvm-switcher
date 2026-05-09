@@ -28,6 +28,7 @@ static uint8_t  rx_buf[MAX_PAYLOAD + 1];
 // ── Callbacks ────────────────────────────────────────────────────────────────
 static LinkKeyboardCb cb_keyboard = nullptr;
 static LinkConsumerCb cb_consumer = nullptr;
+static LinkSystemCb   cb_system   = nullptr;
 static LinkLogCb      cb_log      = nullptr;
 
 // ── Heartbeat state ──────────────────────────────────────────────────────────
@@ -53,6 +54,12 @@ static void handleFrame(uint8_t type, uint8_t* payload, uint8_t len) {
         if (len >= 2 && cb_consumer) {
             uint16_t usage = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
             cb_consumer(usage);
+        }
+        break;
+    case LinkMsg::SYSTEM:
+        if (len >= 2 && cb_system) {
+            uint16_t usage = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+            cb_system(usage);
         }
         break;
     case LinkMsg::LOG:
@@ -114,6 +121,7 @@ void hidLinkLoop() {
 
 void hidLinkOnKeyboard(LinkKeyboardCb cb) { cb_keyboard = cb; }
 void hidLinkOnConsumer(LinkConsumerCb cb) { cb_consumer = cb; }
+void hidLinkOnSystem  (LinkSystemCb   cb) { cb_system   = cb; }
 void hidLinkOnLog     (LinkLogCb      cb) { cb_log      = cb; }
 
 void hidLinkSendUsbStatus(bool mounted, bool suspended) {

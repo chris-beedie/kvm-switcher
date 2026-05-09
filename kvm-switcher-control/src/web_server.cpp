@@ -20,6 +20,7 @@ extern bool last_ddc_a_ok;
 extern bool last_ddc_b_ok;
 extern volatile bool    api_switch_requested;
 extern volatile int     api_set_input;
+extern volatile bool    api_wake_requested;
 extern volatile uint8_t api_set_hotkey_key;
 extern volatile uint8_t api_set_hotkey_mod;
 extern volatile bool    debug_led_set;
@@ -86,6 +87,12 @@ void setupWebServer() {
   server.on("/api/input/2", HTTP_ANY, [](AsyncWebServerRequest *request) {
     api_set_input = 2;
     request->send(200, "application/json", "{\"status\":\"switching\"}");
+  });
+
+  // POST /api/wake — send Shift + System-Wake HID on the current input
+  server.on("/api/wake", HTTP_POST, [](AsyncWebServerRequest *request) {
+    api_wake_requested = true;
+    request->send(200, "application/json", "{\"ok\":true}");
   });
 
   // GET /api/hotkey/set?key=N&mod=M — queue a hotkey update for loop()

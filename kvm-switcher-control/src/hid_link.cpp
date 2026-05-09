@@ -110,6 +110,12 @@ bool hidLinkSendConsumer(uint16_t usage_code) {
     return true;
 }
 
+bool hidLinkSendSystem(uint16_t usage_code) {
+    uint8_t pl[2] = { (uint8_t)(usage_code & 0xFF), (uint8_t)(usage_code >> 8) };
+    writeFrame(LinkMsg::SYSTEM, pl, 2);
+    return true;
+}
+
 void hidLinkLog(const char* msg) {
     if (!msg) return;
     size_t n = strlen(msg);

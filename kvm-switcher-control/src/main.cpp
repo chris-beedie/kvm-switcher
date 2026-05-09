@@ -58,9 +58,14 @@
 #define BTN_DEBOUNCE_MS        200
 #define BTN_LONG_PRESS_MS      3000    // hold ≥ this and release → reboot
 #define BTN_FACTORY_RESET_MS   10000   // hold ≥ this and release → wipe creds
+#define WAKE_PENDING_MS        2000    // window after wake-tap to retap-switch
 #define MONITOR_POLL_AWAKE_MS  5000
 #define MONITOR_POLL_ASLEEP_MS 30000
 #define MONITOR_SLEEP_DELAY_MS 10000
+
+// HID System Control usage codes (Generic Desktop page).
+#define HID_SYS_WAKE_UP 0x83
+#define HID_SYS_RELEASE 0x00
 
 // === LED ===
 Adafruit_NeoPixel strip(LED_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
@@ -79,6 +84,7 @@ bool last_ddc_b_ok  = true;
 // API flags — set by web/MQTT handlers, consumed by loop()
 volatile bool    api_switch_requested = false;
 volatile int     api_set_input        = 0;
+volatile bool    api_wake_requested   = false;
 volatile uint8_t api_set_hotkey_key   = 0;   // non-zero = pending hotkey change
 volatile uint8_t api_set_hotkey_mod   = 0;
 
@@ -92,6 +98,15 @@ unsigned long btn_press_start = 0;
 unsigned long last_btn_action = 0;
 int           btn_threshold   = 0;     // 0 = none, 1 = >=3s, 2 = >=10s (LED feedback only)
 bool          dbg_btn_pressed = false;
+
+// === Wake-pending state ===
+// While monitors are asleep, the first tap "arms" wake mode for WAKE_PENDING_MS
+// instead of doing a normal switch. A second tap during that window toggles
+// the intended input (no DDC). On expiry we fire the wake sequence to whichever
+// input is now selected.
+bool          wake_pending           = false;
+unsigned long wake_pending_started   = 0;
+bool          wake_input_at_arm      = false;
 
 // === Monitor sleep state ===
 unsigned long monitor_off_since = 0;
@@ -107,8 +122,19 @@ void doSwitch(const char* source);
 void handleButton();
 void handleDebugButton();
 void checkMonitorSleep();
+void handleWakePending();
+void fireWakeSequence();
+uint32_t idleLEDColour();
 
 uint32_t inputColour() { return current_input1 ? COL_TEAL : COL_PURPLE; }
+
+// Default LED colour when nothing is actively painting it (no DDC/wake/etc).
+// During wake-pending we keep showing input colour so the user can see which
+// input the upcoming wake will target.
+uint32_t idleLEDColour() {
+  if (monitors_awake || wake_pending) return inputColour();
+  return COL_OFF;
+}
 
 // ================================================================
 // Setup
@@ -184,9 +210,15 @@ void loop() {
     api_set_hotkey_key = 0;
     // NVS flush happens in webServerLoop() via saveHotkeyIfPending()
   }
+  if (api_wake_requested) {
+    api_wake_requested = false;
+    Log.printf(">>> wake requested via api -> input %d\n", current_input1 ? 1 : 2);
+    fireWakeSequence();
+  }
 
   handleButton();
   handleDebugButton();
+  handleWakePending();
   checkMonitorSleep();
   mqttLoop();
   webServerLoop();
@@ -199,7 +231,7 @@ void loop() {
     link_was_up = link_now;
     if (link_now) {
       Log.println("[LINK] up");
-      setLED(monitors_awake ? inputColour() : COL_OFF);
+      setLED(idleLEDColour());
     } else {
       Log.println("[LINK] down (no heartbeat from RP2350)");
       flashLED(COL_RED, 2, 80);
@@ -271,14 +303,71 @@ void handleButton() {
       ESP.restart();
     } else if (held > 50 && (millis() - last_btn_action > BTN_DEBOUNCE_MS)) {
       last_btn_action = millis();
-      doSwitch("button");
+      if (!monitors_awake) {
+        if (!wake_pending) {
+          wake_pending         = true;
+          wake_pending_started = millis();
+          wake_input_at_arm    = current_input1;
+          Log.printf(">>> wake armed -> input %d (tap again within %d ms to switch)\n",
+                     current_input1 ? 1 : 2, WAKE_PENDING_MS);
+        } else {
+          current_input1       = !current_input1;
+          wake_pending_started = millis();
+          Log.printf(">>> wake target switched -> input %d\n",
+                     current_input1 ? 1 : 2);
+        }
+        setLED(inputColour());
+      } else {
+        doSwitch("button");
+      }
     } else {
       // Restore LED in case the threshold preview painted it but the press
       // ended below the action window (e.g. <50 ms noise tap).
-      setLED(monitors_awake ? inputColour() : COL_OFF);
+      setLED(idleLEDColour());
     }
     btn_threshold = 0;
   }
+}
+
+// ================================================================
+// Wake-pending: fire the wake sequence WAKE_PENDING_MS after the
+// last arming/retap. If the user changed input during the window,
+// best-effort DDC switch to align the displays before sending wake.
+// ================================================================
+
+void handleWakePending() {
+  if (!wake_pending) return;
+  if (millis() - wake_pending_started < WAKE_PENDING_MS) return;
+  wake_pending = false;
+
+  if (current_input1 != wake_input_at_arm) {
+    Log.printf(">>> wake firing on input %d (DDC switch first)\n",
+               current_input1 ? 1 : 2);
+    SwitchResult r = ddcSwitchMonitors(Wire, Wire1, current_input1);
+    last_ddc_a_ok = r.a_ok;
+    last_ddc_b_ok = r.b_ok;  // monitors are likely asleep — failures expected
+  } else {
+    Log.printf(">>> wake firing on input %d\n", current_input1 ? 1 : 2);
+  }
+
+  fireWakeSequence();
+  setLED(idleLEDColour());
+}
+
+// Send Shift tap + System-Control "Wake Up" tap. Shift wakes S3 USB-host
+// resume; the System usage covers laptops that listen for the dedicated
+// Generic Desktop wake event instead of generic HID activity.
+void fireWakeSequence() {
+  const uint8_t shift_down[8] = { 0x02, 0, 0, 0, 0, 0, 0, 0 };  // Left Shift
+  const uint8_t shift_up[8]   = { 0 };
+
+  hidLinkSendKeyboard(shift_down);
+  delay(50);
+  hidLinkSendKeyboard(shift_up);
+  delay(80);
+  hidLinkSendSystem(HID_SYS_WAKE_UP);
+  delay(50);
+  hidLinkSendSystem(HID_SYS_RELEASE);
 }
 
 // Debug BOOT button — sends 'b' down the link to verify the HID pipeline.

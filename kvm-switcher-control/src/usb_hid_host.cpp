@@ -27,6 +27,8 @@
 #include "usb/usb_host.h"
 #include "hid_host.h"
 #include "hid_usage_keyboard.h"
+#include "driver/periph_ctrl.h"
+#include "soc/periph_defs.h"
 
 // ── Module state ──────────────────────────────────────────────────────────────
 static QueueHandle_t hid_event_queue   = nullptr;
@@ -179,6 +181,14 @@ static void hid_event_task(void* arg) {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 void setupUSBHost() {
+    // ESP.restart() (and OTA-triggered restart) is a CPU-only soft reset, so
+    // the USB-OTG controller keeps whatever state it had before the reboot.
+    // usb_host_install() then can't bring up enumeration cleanly and the
+    // keyboard stays dead until a full power cycle. Force-reset the
+    // peripheral here so a soft reboot behaves like a cold boot.
+    periph_module_reset(PERIPH_USB_MODULE);
+    delay(50);
+
     Log.println("[USB] starting native USB host");
 
     // 1. USB library task — handles bus events, must come up first.

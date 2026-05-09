@@ -42,15 +42,20 @@ constexpr uint32_t LINK_TIMEOUT_MS  = 3000;
 constexpr uint32_t LED_PULSE_MS     = 60;
 constexpr uint32_t SUSPEND_PULSE_MS = 1500;
 
-// ── HID descriptor: keyboard + consumer-control ──────────────────────────────
+// ── HID descriptor: keyboard + consumer-control + system-control ────────────
 enum {
     REPORT_ID_KEYBOARD = 1,
     REPORT_ID_CONSUMER = 2,
+    REPORT_ID_SYSTEM   = 3,
 };
 
+// System Control collection (Generic Desktop usage 0x80). TinyUSB ships an
+// array-style descriptor: a 1-byte report carries a 2-bit index in bits 0-1,
+// with values 1=Power Down, 2=Sleep, 3=Wake Up, 0=release.
 uint8_t const desc_hid_report[] = {
-    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(REPORT_ID_KEYBOARD)),
-    TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(REPORT_ID_CONSUMER)),
+    TUD_HID_REPORT_DESC_KEYBOARD      (HID_REPORT_ID(REPORT_ID_KEYBOARD)),
+    TUD_HID_REPORT_DESC_CONSUMER      (HID_REPORT_ID(REPORT_ID_CONSUMER)),
+    TUD_HID_REPORT_DESC_SYSTEM_CONTROL(HID_REPORT_ID(REPORT_ID_SYSTEM)),
 };
 
 Adafruit_USBD_HID usb_hid;
@@ -70,6 +75,7 @@ static uint16_t prev_consumer  = 0;
 // ── Forward declarations ─────────────────────────────────────────────────────
 static void onKeyboard(const uint8_t kb[8]);
 static void onConsumer(uint16_t usage_code);
+static void onSystem  (uint16_t usage_code);
 static void onLog     (const char* msg);
 static void updateStatusLED();
 static void publishUsbStatus();
@@ -95,6 +101,7 @@ void setup() {
     hidLinkBegin(LINK_TX_PIN, LINK_RX_PIN);
     hidLinkOnKeyboard(onKeyboard);
     hidLinkOnConsumer(onConsumer);
+    hidLinkOnSystem  (onSystem);
     hidLinkOnLog     (onLog);
 
     // Wait briefly for USB enumeration before we start chattering.
@@ -161,6 +168,29 @@ static void onConsumer(uint16_t usage_code) {
 
     usb_hid.sendReport16(REPORT_ID_CONSUMER, usage_code);
     prev_consumer = usage_code;
+}
+
+// System-control: usage codes 0x81/0x82/0x83, 0 = release. Translated to
+// the 1-byte bit-field report defined in TUD_HID_REPORT_DESC_SYSTEM_CONTROL.
+static void onSystem(uint16_t usage_code) {
+    last_link_rx_ms = millis();
+    led_pulse_until = millis() + LED_PULSE_MS;
+
+    // TinyUSB descriptor uses array index encoding: 1=Power Down, 2=Sleep,
+    // 3=Wake Up, 0=release.
+    uint8_t report = 0;
+    switch (usage_code) {
+        case 0x81: report = 1; break;
+        case 0x82: report = 2; break;
+        case 0x83: report = 3; break;
+        default:   report = 0; break;
+    }
+
+    uint32_t start = millis();
+    while (!usb_hid.ready() && (millis() - start) < 5) delay(0);
+    if (!usb_hid.ready()) return;
+
+    usb_hid.sendReport(REPORT_ID_SYSTEM, &report, 1);
 }
 
 // Log line from the ESP32 — print to USB-CDC with a tag.
