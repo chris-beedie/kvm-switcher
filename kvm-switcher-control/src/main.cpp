@@ -38,6 +38,8 @@
 #include "usb_hid_host.h"
 #include "hotkey_config.h"
 #include "hid_link.h"
+#include "wifi_setup.h"
+#include "settings.h"
 
 // === Pins ===
 #define SDA_A          1   // I2C bus A — Monitor A
@@ -54,7 +56,8 @@
 
 // === Timing ===
 #define BTN_DEBOUNCE_MS        200
-#define BTN_LONG_PRESS_MS      3000
+#define BTN_LONG_PRESS_MS      3000    // hold ≥ this and release → reboot
+#define BTN_FACTORY_RESET_MS   10000   // hold ≥ this and release → wipe creds
 #define MONITOR_POLL_AWAKE_MS  5000
 #define MONITOR_POLL_ASLEEP_MS 30000
 #define MONITOR_SLEEP_DELAY_MS 10000
@@ -87,6 +90,7 @@ volatile uint8_t debug_led_r = 0, debug_led_g = 0, debug_led_b = 0;
 bool          btn_pressed     = false;
 unsigned long btn_press_start = 0;
 unsigned long last_btn_action = 0;
+int           btn_threshold   = 0;     // 0 = none, 1 = >=3s, 2 = >=10s (LED feedback only)
 bool          dbg_btn_pressed = false;
 
 // === Monitor sleep state ===
@@ -103,7 +107,6 @@ void doSwitch(const char* source);
 void handleButton();
 void handleDebugButton();
 void checkMonitorSleep();
-void setupWiFi();
 
 uint32_t inputColour() { return current_input1 ? COL_TEAL : COL_PURPLE; }
 
@@ -142,7 +145,8 @@ void setup() {
   }
 
   loadHotkeyConfig();
-  setupWiFi();
+  loadSettings();
+  runWifiSetup();
   setupWebServer();
   setupMQTT();
   setupUSBHost();
@@ -234,30 +238,46 @@ void doSwitch(const char* source) {
 // Buttons
 // ================================================================
 
+// Press <50ms: noise. 50ms–3s: switch input. 3s–10s: reboot.
+// 10s+: factory reset (wipe WiFi creds + MQTT settings, return to portal).
+// Action fires on RELEASE so the user can keep holding past 3s to reach 10s.
+// LED previews the threshold while held: red at 3s, purple at 10s.
 void handleButton() {
   bool pressed = (digitalRead(BTN_PIN) == LOW);
 
   if (pressed && !btn_pressed) {
     btn_pressed     = true;
     btn_press_start = millis();
+    btn_threshold   = 0;
   } else if (pressed && btn_pressed) {
-    if (millis() - btn_press_start >= BTN_LONG_PRESS_MS) {
-      Log.println(">>> LONG PRESS -> reboot");
-      for (int i = 0; i < 6; i++) {
-        setLED(COL_RED); delay(80);
-        setLED(COL_OFF); delay(80);
-      }
-      ESP.restart();
+    unsigned long held = millis() - btn_press_start;
+    if (held >= BTN_FACTORY_RESET_MS && btn_threshold != 2) {
+      btn_threshold = 2;
+      setLED(COL_PURPLE);
+    } else if (held >= BTN_LONG_PRESS_MS && btn_threshold == 0) {
+      btn_threshold = 1;
+      setLED(COL_RED);
     }
   } else if (!pressed && btn_pressed) {
     btn_pressed = false;
     unsigned long held = millis() - btn_press_start;
-    if (held > 50 && held < BTN_LONG_PRESS_MS) {
-      if (millis() - last_btn_action > BTN_DEBOUNCE_MS) {
-        last_btn_action = millis();
-        doSwitch("button");
-      }
+    if (held >= BTN_FACTORY_RESET_MS) {
+      Log.println(">>> 10s LONG PRESS -> factory reset");
+      for (int i = 0; i < 5; i++) { setLED(COL_PURPLE); delay(100); setLED(COL_OFF); delay(100); }
+      wifiResetAndReboot();
+    } else if (held >= BTN_LONG_PRESS_MS) {
+      Log.println(">>> 3s LONG PRESS -> reboot");
+      for (int i = 0; i < 6; i++) { setLED(COL_RED); delay(80); setLED(COL_OFF); delay(80); }
+      ESP.restart();
+    } else if (held > 50 && (millis() - last_btn_action > BTN_DEBOUNCE_MS)) {
+      last_btn_action = millis();
+      doSwitch("button");
+    } else {
+      // Restore LED in case the threshold preview painted it but the press
+      // ended below the action window (e.g. <50 ms noise tap).
+      setLED(monitors_awake ? inputColour() : COL_OFF);
     }
+    btn_threshold = 0;
   }
 }
 
@@ -332,30 +352,3 @@ void flashLED(uint32_t colour, int times, int ms) {
   setLED(prev);
 }
 
-// ================================================================
-// WiFi
-// ================================================================
-
-void setupWiFi() {
-  Log.printf("WiFi '%s'... ", WIFI_SSID);
-  WiFi.setHostname(DEVICE_NAME);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  // Flash blue while connecting (up to 10 s). Blue = WiFi activity.
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    strip.setPixelColor(0, strip.Color(0, 0, 60)); strip.show(); delay(250);
-    strip.setPixelColor(0, strip.Color(0, 0,  0)); strip.show(); delay(250);
-    attempts++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    // Two quick green flashes = WiFi connected.
-    flashLED(strip.Color(0, 80, 0), 2, 150);
-    Log.printf("connected (%s)\n", WiFi.localIP().toString().c_str());
-  } else {
-    // Three slow red flashes = WiFi failed, continuing offline.
-    flashLED(COL_RED, 3, 300);
-    Log.println("failed — offline mode");
-  }
-}

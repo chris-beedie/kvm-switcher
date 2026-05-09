@@ -1,6 +1,7 @@
 #include "mqtt_client.h"
 #include "config.h"
 #include "hid_link.h"
+#include "settings.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -107,15 +108,23 @@ void mqttPublishState() {
 }
 
 void setupMQTT() {
-  if (strlen(MQTT_HOST) == 0) {
-    Log.println("MQTT disabled");
+  if (strlen(getMqttHost()) == 0) {
+    mqtt_enabled = false;
+    Log.println("MQTT disabled (no host configured)");
     return;
   }
   mqtt_enabled = true;
-  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setServer(getMqttHost(), getMqttPort());
   mqtt.setCallback(mqttCallback);
   mqtt.setBufferSize(1024);
-  Log.printf("MQTT: %s:%d\n", MQTT_HOST, MQTT_PORT);
+  Log.printf("MQTT: %s:%u\n", getMqttHost(), getMqttPort());
+}
+
+void mqttReconfigure() {
+  if (mqtt.connected()) mqtt.disconnect();
+  mqtt_ha_configured  = false;
+  last_mqtt_reconnect = 0;       // attempt fresh connect immediately
+  setupMQTT();
 }
 
 void mqttLoop() {
@@ -127,8 +136,8 @@ void mqttLoop() {
 
     String avail_topic = String("kvm/") + DEVICE_NAME + "/status";
     bool ok;
-    if (strlen(MQTT_USER) > 0)
-      ok = mqtt.connect(DEVICE_NAME, MQTT_USER, MQTT_PASS,
+    if (strlen(getMqttUser()) > 0)
+      ok = mqtt.connect(DEVICE_NAME, getMqttUser(), getMqttPass(),
                         avail_topic.c_str(), 0, true, "offline");
     else
       ok = mqtt.connect(DEVICE_NAME, nullptr, nullptr,

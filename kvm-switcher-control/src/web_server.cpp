@@ -5,6 +5,9 @@
 #include "led_debug.h"
 #include "hotkey_config.h"
 #include "hid_link.h"
+#include "settings.h"
+#include "mqtt_client.h"
+#include "wifi_setup.h"
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -23,6 +26,15 @@ extern volatile bool    debug_led_set;
 extern volatile uint8_t debug_led_r, debug_led_g, debug_led_b;
 
 static AsyncWebServer server(80);
+
+// Settings changes from async handlers are deferred to the Arduino task —
+// NVS writes and ESP.restart() must not run on the AsyncTCP stack.
+static volatile bool mqtt_save_pending = false;
+static volatile bool wifi_reset_pending = false;
+static String pending_mqtt_host;
+static String pending_mqtt_user;
+static String pending_mqtt_pass;
+static uint16_t pending_mqtt_port = 1883;
 
 // ================================================================
 // Status JSON (also used by mqtt_client)
@@ -104,6 +116,39 @@ void setupWebServer() {
     request->send(200, "application/json", json);
   });
 
+  // GET /api/mqtt — return current MQTT settings
+  server.on("/api/mqtt", HTTP_GET, [](AsyncWebServerRequest *request) {
+    JsonDocument doc;
+    doc["host"] = getMqttHost();
+    doc["port"] = getMqttPort();
+    doc["user"] = getMqttUser();
+    doc["pass"] = getMqttPass();
+    String json; serializeJson(doc, json);
+    request->send(200, "application/json", json);
+  });
+
+  // POST /api/mqtt/set — form-urlencoded host/port/user/pass; queues save
+  server.on("/api/mqtt/set", HTTP_POST, [](AsyncWebServerRequest *request) {
+    pending_mqtt_host = request->hasParam("host", true)
+                          ? request->getParam("host", true)->value() : String("");
+    pending_mqtt_user = request->hasParam("user", true)
+                          ? request->getParam("user", true)->value() : String("");
+    pending_mqtt_pass = request->hasParam("pass", true)
+                          ? request->getParam("pass", true)->value() : String("");
+    int port = request->hasParam("port", true)
+                 ? request->getParam("port", true)->value().toInt() : 1883;
+    if (port < 1 || port > 65535) port = 1883;
+    pending_mqtt_port = (uint16_t)port;
+    mqtt_save_pending = true;
+    request->send(200, "application/json", "{\"ok\":true}");
+  });
+
+  // POST /api/wifi/reset — wipe WiFi creds + MQTT settings, reboot to portal
+  server.on("/api/wifi/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
+    request->send(200, "application/json", "{\"ok\":true}");
+    wifi_reset_pending = true;
+  });
+
   ElegantOTA.begin(&server);
 
   server.on("/debug/led", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -128,4 +173,17 @@ void setupWebServer() {
 void webServerLoop() {
   ElegantOTA.loop();
   saveHotkeyIfPending();  // flush NVS write from Arduino task — never from async handler
+
+  if (mqtt_save_pending) {
+    mqtt_save_pending = false;
+    saveMqttSettings(pending_mqtt_host.c_str(), pending_mqtt_port,
+                     pending_mqtt_user.c_str(), pending_mqtt_pass.c_str());
+    mqttReconfigure();
+  }
+
+  if (wifi_reset_pending) {
+    wifi_reset_pending = false;
+    delay(100);              // let the response flush before WiFi goes down
+    wifiResetAndReboot();    // does not return
+  }
 }

@@ -113,10 +113,15 @@ state is exposed via the Web UI status JSON (`hid_link_up`, `usb_mounted`,
    both an HID keyboard and a CDC serial port. The CDC port should print
    `[USB] mounted=1 suspended=0` on connect. NeoPixel will be solid red
    (no link heartbeat — expected when stand-alone).
-5. **Verify ESP32-S3 stand-alone**: configure WiFi in `secrets.h`, then check
-   the Web UI loads. Logs appear over the link UART (1 Mbps on D6/D7), so
-   to see them stand-alone you need a USB-UART adapter on those pins or
-   to pair it with the RP2350 first.
+5. **Verify ESP32-S3 stand-alone**: on first boot the device has no stored
+   credentials and starts an open AP `KVM-Switcher-Setup` (LED solid blue).
+   Connect to it from a phone, the captive portal pops up at
+   `http://192.168.4.1`, pick your WiFi and (optionally) enter MQTT host /
+   port / user / pass, then save. The device reboots, joins your WiFi, and
+   the Web UI is reachable at `http://kvm-switcher.local/`. Logs appear
+   over the link UART (1 Mbps on D6/D7), so to see them stand-alone you
+   need a USB-UART adapter on those pins or to pair it with the RP2350
+   first.
 6. **Wire the link**: cross TX↔RX, common GND, then add the 5V rail with
    only one of the boards plugged into a USB host. Logs from the ESP32
    now stream out the RP2350's USB-CDC port, prefixed `[ESP] …`.
@@ -130,9 +135,22 @@ cd kvm-switcher-hid     && pio run -t upload   # RP2350
 
 ## Configuration
 
-`kvm-switcher-control/src/secrets.h` (copy from `secrets.h.example`) holds
-WiFi + MQTT credentials. The active hotkey is configurable at runtime via
-the Web UI and persisted in NVS.
+There is no source-tree config file — credentials live in NVS on the device.
+
+**First boot / no stored WiFi:** the ESP32 comes up as an open AP
+`KVM-Switcher-Setup` with a captive portal at `http://192.168.4.1`. The portal
+form takes the WiFi SSID + password and (optionally) MQTT host / port / user /
+password. Save and the device reboots into station mode. The status LED is
+solid blue while the portal is active.
+
+**Once joined:** everything else is editable from the Web UI under the
+*MQTT settings* and *Hotkey settings* drop-downs, and persisted in NVS.
+
+**Forgetting WiFi (e.g. moving to a new network):** either click **Forget WiFi
+& reboot** in the *WiFi* drop-down on the Web UI, or **hold the KVM input
+button for 10 seconds** (LED previews red at 3 s = reboot, purple at 10 s =
+factory reset; release inside the colour you want). This wipes WiFi creds
+and MQTT settings, then reboots into the captive portal.
 
 ## OTA updates (ESP32 only)
 

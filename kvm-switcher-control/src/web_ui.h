@@ -64,6 +64,15 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   .hk-input:focus{border-color:#555;background:#0d0d12}
   .hk-input.capturing{border-color:#7F77DD80;color:#AFA9EC}
   .hk-save{padding:9px;font-size:12px}
+  .field{display:flex;align-items:center;gap:8px}
+  .field label{font-size:11px;color:#666;flex:0 0 70px}
+  .field input{flex:1;padding:7px 10px;background:#111115;border:1px solid #3a3a44;border-radius:6px;color:#ccc;font-size:12px;font-family:monospace;outline:none;min-width:0}
+  .field input:focus{border-color:#555;background:#0d0d12}
+  .btn-danger{background:#2a1418;border-color:#5a2a30;color:#cc7a82}
+  .btn-danger:hover{background:#3a1c20}
+  .status-msg{font-size:11px;color:#666;text-align:center;min-height:14px}
+  .status-msg.ok{color:#5DCAA5}
+  .status-msg.err{color:#E24B4A}
   .foot{margin-top:10px;text-align:center;font-size:10px;color:#444}
   .foot a{color:#555;text-decoration:none}
   .foot a:hover{color:#777}
@@ -120,6 +129,25 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <p>Click the field below, then press any key combination to set a new hotkey. Modifier-only combos are not allowed.</p>
       <div id="hkInput" class="hk-input" tabindex="0">Click here, then press a key…</div>
       <button class="btn hk-save" id="saveHkBtn" onclick="saveHotkey()" disabled>Save hotkey</button>
+    </div>
+  </details>
+  <details class="settings">
+    <summary>MQTT settings</summary>
+    <div class="hk-form">
+      <p>Leave host blank to disable. Changes apply immediately, no reboot needed.</p>
+      <div class="field"><label>Host</label><input id="mqHost" type="text" placeholder="10.0.0.10 or blank"></div>
+      <div class="field"><label>Port</label><input id="mqPort" type="number" min="1" max="65535" placeholder="1883"></div>
+      <div class="field"><label>User</label><input id="mqUser" type="text" placeholder="(optional)"></div>
+      <div class="field"><label>Password</label><input id="mqPass" type="password" placeholder="(optional)"></div>
+      <button class="btn hk-save" id="saveMqBtn" onclick="saveMqtt()">Save MQTT</button>
+      <div class="status-msg" id="mqStatus"></div>
+    </div>
+  </details>
+  <details class="settings">
+    <summary>WiFi</summary>
+    <div class="hk-form">
+      <p>Forget the stored WiFi network and reboot into the setup portal. The device will appear as the open AP <code>KVM-Switcher-Setup</code>; connect to it from your phone to enter new credentials.</p>
+      <button class="btn btn-danger hk-save" id="forgetWifiBtn" onclick="forgetWifi()">Forget WiFi &amp; reboot</button>
     </div>
   </details>
   <div class="wifi-row">
@@ -314,8 +342,53 @@ function loadHotkey() {
     document.getElementById('hotkeyDisplay').textContent = d.label || '--';
   }).catch(function() {});
 }
+
+// ── MQTT settings ────────────────────────────────────────────────────────────
+function loadMqtt() {
+  fetch('/api/mqtt').then(function(r) { return r.json(); }).then(function(d) {
+    document.getElementById('mqHost').value = d.host || '';
+    document.getElementById('mqPort').value = d.port || 1883;
+    document.getElementById('mqUser').value = d.user || '';
+    document.getElementById('mqPass').value = d.pass || '';
+  }).catch(function() {});
+}
+function saveMqtt() {
+  var btn = document.getElementById('saveMqBtn');
+  var msg = document.getElementById('mqStatus');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  msg.textContent = ''; msg.className = 'status-msg';
+  var body = new URLSearchParams();
+  body.set('host', document.getElementById('mqHost').value);
+  body.set('port', document.getElementById('mqPort').value || '1883');
+  body.set('user', document.getElementById('mqUser').value);
+  body.set('pass', document.getElementById('mqPass').value);
+  fetch('/api/mqtt/set', { method: 'POST', body: body })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) {
+        msg.textContent = 'Saved'; msg.className = 'status-msg ok';
+      } else {
+        msg.textContent = d.error || 'Error'; msg.className = 'status-msg err';
+      }
+    })
+    .catch(function(e) {
+      msg.textContent = e.message || 'Error'; msg.className = 'status-msg err';
+    })
+    .finally(function() {
+      btn.disabled = false; btn.textContent = 'Save MQTT';
+    });
+}
+function forgetWifi() {
+  if (!confirm('Forget the stored WiFi network and reboot into the setup portal?')) return;
+  var btn = document.getElementById('forgetWifiBtn');
+  btn.disabled = true; btn.textContent = 'Rebooting…';
+  // Fire and forget — the device reboots before responding.
+  fetch('/api/wifi/reset', { method: 'POST' }).catch(function() {});
+}
+
 poll();
 loadHotkey();
+loadMqtt();
 setInterval(poll, 3000);
 </script>
 </body>

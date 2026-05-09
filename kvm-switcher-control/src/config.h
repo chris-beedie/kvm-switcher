@@ -1,7 +1,5 @@
 #pragma once
 
-#include "secrets.h"  // WiFi + MQTT credentials (gitignored — see secrets.h.example)
-
 // === Device identity ===
 #define DEVICE_NAME   "kvm-switcher"
 #define FRIENDLY_NAME "KVM Switcher"
