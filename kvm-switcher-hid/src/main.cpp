@@ -38,9 +38,10 @@ constexpr uint8_t NEOPIXEL_PIN     = 22;
 constexpr uint8_t NEOPIXEL_POWER   = 23;
 
 // ── Timing ───────────────────────────────────────────────────────────────────
-constexpr uint32_t LINK_TIMEOUT_MS  = 3000;
-constexpr uint32_t LED_PULSE_MS     = 60;
-constexpr uint32_t SUSPEND_PULSE_MS = 1500;
+constexpr uint32_t LINK_TIMEOUT_MS    = 3000;
+constexpr uint32_t LED_PULSE_MS       = 60;
+constexpr uint32_t SUSPEND_PULSE_MS   = 1500;
+constexpr uint32_t USB_REPUBLISH_MS   = 1000;   // resend USB_STATUS once a second
 
 // ── HID descriptor: keyboard + consumer-control + system-control ────────────
 enum {
@@ -115,14 +116,26 @@ void setup() {
 }
 
 void loop() {
-    static bool prev_mounted   = false;
-    static bool prev_suspended = false;
+    static bool     prev_mounted    = false;
+    static bool     prev_suspended  = false;
+    static uint32_t last_republish  = 0;
+
     bool mounted   = TinyUSBDevice.mounted();
     bool suspended = TinyUSBDevice.suspended();
+    uint32_t now   = millis();
+
+    // Publish on every transition AND once a second so the ESP32 always sees
+    // a fresh value, even if it just rebooted (e.g. after OTA) and lost its
+    // in-memory copy of our state. Only the transition path logs to Serial
+    // so the periodic resend doesn't spam the CDC console.
     if (mounted != prev_mounted || suspended != prev_suspended) {
         prev_mounted   = mounted;
         prev_suspended = suspended;
+        last_republish = now;
         publishUsbStatus();
+    } else if (now - last_republish >= USB_REPUBLISH_MS) {
+        last_republish = now;
+        hidLinkSendUsbStatus(mounted, suspended);
     }
 
     hidLinkLoop();

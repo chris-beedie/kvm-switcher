@@ -4,6 +4,10 @@ A two-board DIY KVM that swaps two monitors (DDC/CI) and a keyboard between
 two host computers, with WiFi + Web UI + Home Assistant integration.
 
 ```
+                          USB keyboard
+                               │
+                               │ USB-A → USB-C OTG adapter
+                               ▼
                          ┌──────────────────────┐
                          │  kvm-switcher-       │
                          │  control             │     I2C (level-shifted)
@@ -14,20 +18,16 @@ two host computers, with WiFi + Web UI + Home Assistant integration.
                          │  · MQTT (HA disco.)  │
                          │  · Hotkey filter     │
                          └─────┬─────────┬──────┘
-                               │ UART    │ 5V / GND
-                               │ link    │
-                               ▼         ▼
-                         ┌──────────────────────┐
+                               │ UART    ▲ 5V / GND
+                               │ link    │ (RP2350 → ESP32)
+                               ▼         │
+                         ┌─────┴─────────┴──────┐
                          │  kvm-switcher-hid    │
-                  USB-C  │  (Xiao RP2350)       │
-            PC ◄─────────┤  · USB HID kbd       │
-                         │  · USB HID consumer  │
-                         │  · USB-CDC (debug)   │
+              USB-C      │  (Xiao RP2350)       │
+       Host ◄────────────┤  · USB HID kbd       │
+       (PC, hub,         │  · USB HID consumer  │
+        or dock)         │  · USB-CDC (debug)   │
                          └──────────────────────┘
-                               ▲
-                               │ USB-C → USB-A OTG adapter
-                               │
-                          USB keyboard
 ```
 
 ## Repository layout
@@ -60,16 +60,19 @@ Plus on the ESP32-S3 only:
 ## Power topology
 
 ```
-PC USB-C ──► RP2350 (VBUS = 5V) ──► 5V pin out ──► ESP32-S3 5V in
-                                                       │
-                                                       └─ supplies 5V to the
-                                                          keyboard via the
-                                                          OTG adapter on USB-C
+                     5V                  5V (5V pin →           5V (USB-C VBUS,
+                  via VBUS               5V pin, wired)         host mode)
+Host USB-C  ───────────────►  RP2350  ──────────────────►  ESP32-S3  ──────────────►  Keyboard
+(PC, hub,                                                                           (USB-A via OTG
+ or dock)                                                                            adapter)
 ```
 
-A USB 2.0 PC port (500 mA) covers RP2350 (~30 mA) + ESP32-S3 (~150 mA peak with
-WiFi) + a typical wired keyboard (~50 mA). Add a powered hub if your keyboard
-draws more (RGB, internal hub, etc.).
+The "Host USB-C" upstream of the RP2350 is whatever provides 5V + USB data —
+a PC port, a powered hub, or a docking station all work. A direct USB 2.0 PC
+port (500 mA) is enough on paper for RP2350 (~30 mA) + ESP32-S3 (~150 mA peak
+with WiFi) + a typical wired keyboard (~50 mA), but a powered hub or dock
+gives you headroom and keeps the device powered when the host PC is off,
+which is convenient for the captive-portal / always-on Web UI use case.
 
 **Don't have both boards plugged into separate USB-C cables while the 5V
 rail between them is wired** — pull one host cable before joining 5V.

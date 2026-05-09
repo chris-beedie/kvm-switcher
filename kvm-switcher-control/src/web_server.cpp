@@ -8,6 +8,7 @@
 #include "settings.h"
 #include "mqtt_client.h"
 #include "wifi_setup.h"
+#include "usb_hid_host.h"
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -32,6 +33,7 @@ static AsyncWebServer server(80);
 // NVS writes and ESP.restart() must not run on the AsyncTCP stack.
 static volatile bool mqtt_save_pending = false;
 static volatile bool wifi_reset_pending = false;
+static volatile bool ota_reboot_pending = false;
 static String pending_mqtt_host;
 static String pending_mqtt_user;
 static String pending_mqtt_pass;
@@ -157,6 +159,12 @@ void setupWebServer() {
   });
 
   ElegantOTA.begin(&server);
+  // Take over the post-OTA reboot so we can tear down the USB host stack
+  // first; otherwise the keyboard stays dead until a physical replug.
+  ElegantOTA.setAutoReboot(false);
+  ElegantOTA.onEnd([](bool success) {
+    if (success) ota_reboot_pending = true;
+  });
 
   server.on("/debug/led", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (request->hasParam("r") && request->hasParam("g") && request->hasParam("b")) {
@@ -192,5 +200,14 @@ void webServerLoop() {
     wifi_reset_pending = false;
     delay(100);              // let the response flush before WiFi goes down
     wifiResetAndReboot();    // does not return
+  }
+
+  if (ota_reboot_pending) {
+    ota_reboot_pending = false;
+    delay(500);              // let the OTA HTTP response flush
+    Log.println("[OTA] complete, restarting");
+    usbHidShutdown();        // graceful USB host teardown
+    delay(100);
+    ESP.restart();
   }
 }

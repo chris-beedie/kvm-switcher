@@ -17,3 +17,9 @@ bool usbHidKeyboardConnected();
 // The callback runs from the HID host task — keep it short and just set
 // a volatile flag for the Arduino loop() to consume.
 void usbHidSetSwitchCallback(void (*callback)());
+
+// Graceful teardown of the HID host + USB host stack. Call right before
+// ESP.restart() (e.g. after an OTA upload) so the new firmware finds a
+// quiescent peripheral and re-enumerates the keyboard cleanly without a
+// physical replug.
+void usbHidShutdown();

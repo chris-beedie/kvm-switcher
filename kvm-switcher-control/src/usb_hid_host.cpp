@@ -235,3 +235,17 @@ bool usbHidKeyboardConnected() {
 void usbHidSetSwitchCallback(void (*cb)()) {
     switch_callback = cb;
 }
+
+void usbHidShutdown() {
+    Log.println("[USB] shutting down host stack");
+    // Best-effort teardown. Order matters: HID class driver first (closes
+    // device handles), then free all devices in the host lib, then uninstall
+    // the lib itself. Errors here are not actionable — we're about to
+    // ESP.restart() anyway — so we ignore return codes.
+    hid_host_uninstall();
+    delay(50);
+    usb_host_device_free_all();
+    delay(50);
+    usb_host_uninstall();
+    delay(100);
+}
