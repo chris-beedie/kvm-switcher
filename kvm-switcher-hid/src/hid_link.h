@@ -16,6 +16,8 @@ namespace LinkMsg {
     constexpr uint8_t LOG            = 0x10;  // ESP32 -> RP2350 debug log line
     constexpr uint8_t USB_STATUS     = 0x20;  // RP2350 -> ESP32 USB-to-PC state
     constexpr uint8_t HEARTBEAT      = 0x21;  // RP2350 -> ESP32 1Hz keepalive
+    constexpr uint8_t RESET_REQ      = 0x30;  // ESP32 -> RP2350: drive the
+                                              //   wired ESP32 RST pin low
 }
 
 // Callbacks invoked from hidLinkLoop() on receipt of each message type.
@@ -25,6 +27,7 @@ namespace LinkMsg {
 typedef void (*LinkKeyboardCb)(const uint8_t kb[8]);
 typedef void (*LinkConsumerCb)(uint16_t usage_code);
 typedef void (*LinkSystemCb)  (uint16_t usage_code);
+typedef void (*LinkResetCb)   (void);
 typedef void (*LinkLogCb)(const char* msg);
 
 // Initialise UART0 link from the ESP32 on the given pins (GP0/GP1 by default).
@@ -37,6 +40,7 @@ void hidLinkLoop();
 void hidLinkOnKeyboard(LinkKeyboardCb cb);
 void hidLinkOnConsumer(LinkConsumerCb cb);
 void hidLinkOnSystem  (LinkSystemCb   cb);
+void hidLinkOnReset   (LinkResetCb    cb);
 void hidLinkOnLog     (LinkLogCb cb);
 
 // Send our USB-to-PC mount status to the ESP32 (call when it changes).

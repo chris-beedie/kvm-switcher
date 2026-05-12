@@ -66,7 +66,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   .mon-dot{width:6px;height:6px;border-radius:50%}
   .mon-dot.ok{background:#1D9E75}
   .mon-dot.fail{background:#E24B4A}
-  .tags{display:flex;gap:6px;margin-bottom:.75rem}
+  .tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:.75rem}
   .tag{font-size:11px;padding:4px 10px;border-radius:6px;letter-spacing:.02em}
   .t-awake{background:#0F2D24;color:#5DCAA5}
   .t-asleep{background:#2D2106;color:#EF9F27}
@@ -148,7 +148,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
   <div class="tags">
     <span class="tag t-asleep" id="sleepTag">--</span>
+    <span class="tag t-off" id="linkTag">--</span>
     <span class="tag t-off" id="pcTag">--</span>
+    <span class="tag t-off" id="kbTag">--</span>
   </div>
   <div class="hk-row">
     <span class="hk-label">Hotkey</span>
@@ -370,11 +372,30 @@ function poll() {
     var st = document.getElementById('sleepTag');
     st.textContent = d.monitors_awake ? 'Monitors awake' : 'Monitors asleep';
     st.className = 'tag ' + (d.monitors_awake ? 't-awake' : 't-asleep');
+    var kb = document.getElementById('kbTag');
+    if (!d.kb_connected) {
+      kb.textContent = 'Keyboard ?'; kb.className = 'tag t-down';
+    } else if (d.kb_age_ms == null) {
+      kb.textContent = 'Keyboard idle'; kb.className = 'tag t-off';
+    } else if (d.kb_age_ms < 2000) {
+      kb.textContent = 'Keyboard active'; kb.className = 'tag t-awake';
+    } else if (d.kb_age_ms < 60000) {
+      kb.textContent = 'Keyboard ' + Math.round(d.kb_age_ms/1000) + 's';
+      kb.className = 'tag t-off';
+    } else {
+      kb.textContent = 'Keyboard idle'; kb.className = 'tag t-off';
+    }
+    var lk = document.getElementById('linkTag');
+    if (d.hid_link_up) {
+      lk.textContent = 'Link OK';   lk.className = 'tag t-awake';
+    } else {
+      lk.textContent = 'Link down'; lk.className = 'tag t-down';
+    }
     var pc = document.getElementById('pcTag');
     if (!d.hid_link_up) {
-      pc.textContent = 'Link down'; pc.className = 'tag t-down';
+      pc.textContent = 'PC ?';     pc.className = 'tag t-off';
     } else if (!d.usb_mounted) {
-      pc.textContent = 'PC off';   pc.className = 'tag t-off';
+      pc.textContent = 'PC off';    pc.className = 'tag t-off';
     } else if (d.usb_suspended) {
       pc.textContent = 'PC asleep'; pc.className = 'tag t-asleep';
     } else {

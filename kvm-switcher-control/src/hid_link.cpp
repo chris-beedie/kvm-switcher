@@ -116,6 +116,11 @@ bool hidLinkSendSystem(uint16_t usage_code) {
     return true;
 }
 
+bool hidLinkSendResetRequest() {
+    writeFrame(LinkMsg::RESET_REQ, nullptr, 0);
+    return true;
+}
+
 void hidLinkLog(const char* msg) {
     if (!msg) return;
     size_t n = strlen(msg);

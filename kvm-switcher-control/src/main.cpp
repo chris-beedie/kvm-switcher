@@ -147,7 +147,7 @@ void setup() {
   hidLinkBegin(LINK_TX_PIN, LINK_RX_PIN);    // up before any Log.print so logs reach RP2350
 
   delay(200);
-  Log.println("\n=== KVM Switcher (Xiao ESP32-S3) ===");
+  Log.println("\n=== KVM Switcher (Xiao ESP32-S3) build F ===");
 
   pinMode(BTN_PIN, INPUT_PULLUP);
   pinMode(DEBUG_BTN_PIN, INPUT_PULLUP);

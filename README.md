@@ -43,8 +43,17 @@ two host computers, with WiFi + Web UI + Home Assistant integration.
 |---|---|---|
 | Link UART TX | D6 (GPIO43) | D7 (GP1) — RX |
 | Link UART RX | D7 (GPIO44) | D6 (GP0) — TX |
+| ESP32 hardware reset | RST pad (back of board, near USB-C) | D5 (GP7) |
 | 5V rail | 5V (input) | 5V/VBUS (output) |
 | Ground | GND | GND |
+
+The **ESP32 hardware reset** wire is required for OTA updates to recover the
+keyboard cleanly. After flashing, the firmware asks the RP2350 to briefly
+drive this line low, hardware-resetting the ESP32. This is the only reliable
+way to reset the USB-OTG analog PHY — without it, an OTA-triggered software
+reset leaves the keyboard in a stale enumerated state and you have to
+physically replug it. The line is held high-Z by the RP2350 except during
+the ~20 ms reset pulse, so the ESP32's RESET button still works normally.
 
 Plus on the ESP32-S3 only:
 

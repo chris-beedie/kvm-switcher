@@ -32,8 +32,14 @@
 #include "hid_link.h"
 
 // ── Pins ─────────────────────────────────────────────────────────────────────
-constexpr uint8_t LINK_TX_PIN = 0;   // D6 -> ESP32 RX
-constexpr uint8_t LINK_RX_PIN = 1;   // D7 <- ESP32 TX
+constexpr uint8_t LINK_TX_PIN      = 0;   // D6 -> ESP32 RX
+constexpr uint8_t LINK_RX_PIN      = 1;   // D7 <- ESP32 TX
+constexpr uint8_t ESP32_RST_PIN    = 7;   // D5 -> ESP32 RST pad (back side of
+                                          //   Xiao ESP32-S3, near USB-C). Drive
+                                          //   low briefly to hardware-reset
+                                          //   the ESP32. Held high-Z when not
+                                          //   resetting (ESP32 RST has its own
+                                          //   pull-up).
 constexpr uint8_t NEOPIXEL_PIN     = 22;
 constexpr uint8_t NEOPIXEL_POWER   = 23;
 
@@ -77,6 +83,7 @@ static uint16_t prev_consumer  = 0;
 static void onKeyboard(const uint8_t kb[8]);
 static void onConsumer(uint16_t usage_code);
 static void onSystem  (uint16_t usage_code);
+static void onReset   (void);
 static void onLog     (const char* msg);
 static void updateStatusLED();
 static void publishUsbStatus();
@@ -99,10 +106,16 @@ void setup() {
 
     Serial.begin(115200);   // USB-CDC — appears as a serial port to the PC
 
+    // Default the ESP32 reset pin to high-impedance — the ESP32's RST has
+    // its own pull-up, so floating = held high = not reset. We only flip
+    // it to OUTPUT-LOW briefly when we actually want to reset the ESP32.
+    pinMode(ESP32_RST_PIN, INPUT);
+
     hidLinkBegin(LINK_TX_PIN, LINK_RX_PIN);
     hidLinkOnKeyboard(onKeyboard);
     hidLinkOnConsumer(onConsumer);
     hidLinkOnSystem  (onSystem);
+    hidLinkOnReset   (onReset);
     hidLinkOnLog     (onLog);
 
     // Wait briefly for USB enumeration before we start chattering.
@@ -204,6 +217,20 @@ static void onSystem(uint16_t usage_code) {
     if (!usb_hid.ready()) return;
 
     usb_hid.sendReport(REPORT_ID_SYSTEM, &report, 1);
+}
+
+// ESP32 asked us to hardware-reset it. Drive D5 low for 20ms (ESP32-S3 needs
+// only ~1 us on RST/EN to trigger reset; 20 ms is generous), then release.
+// If the wire mod isn't installed this is a no-op — the unwired GPIO has no
+// effect on the ESP32 — and the ESP32 will fall through to its software reset
+// fallback after a short timeout.
+static void onReset(void) {
+    last_link_rx_ms = millis();
+    Serial.println("[RST] reset request from ESP32 — driving RST low");
+    pinMode(ESP32_RST_PIN, OUTPUT);
+    digitalWrite(ESP32_RST_PIN, LOW);
+    delay(20);
+    pinMode(ESP32_RST_PIN, INPUT);   // back to high-Z
 }
 
 // Log line from the ESP32 — print to USB-CDC with a tag.

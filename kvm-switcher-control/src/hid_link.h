@@ -18,6 +18,12 @@ namespace LinkMsg {
     constexpr uint8_t LOG            = 0x10;  // ESP32 -> RP2350 debug log line
     constexpr uint8_t USB_STATUS     = 0x20;  // RP2350 -> ESP32 USB-to-PC state
     constexpr uint8_t HEARTBEAT      = 0x21;  // RP2350 -> ESP32 1Hz keepalive
+    constexpr uint8_t RESET_REQ      = 0x30;  // ESP32 -> RP2350: please drive
+                                              //   the wired ESP32 RST pin low
+                                              //   to hardware-reset the ESP32
+                                              //   (used after OTA — the only
+                                              //   reliable way to reset the
+                                              //   USB-OTG analog PHY)
 }
 
 // USB-to-PC status payload (1 byte, MSB→LSB):
@@ -46,6 +52,10 @@ bool hidLinkSendConsumer(uint16_t usage_code);
 // Send a system-control usage code (Generic Desktop page).
 //   0x81 Power Down, 0x82 Sleep, 0x83 Wake Up, 0x00 release.
 bool hidLinkSendSystem(uint16_t usage_code);
+
+// Ask the RP2350 to hardware-reset us by driving its wired RST GPIO low.
+// No-op if the wire mod isn't installed (RP2350 ignores the unwired pin).
+bool hidLinkSendResetRequest();
 
 // Send a UTF-8 log line. Truncated to 200 bytes. No trailing newline needed.
 void hidLinkLog(const char* msg);

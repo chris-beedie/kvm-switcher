@@ -13,6 +13,9 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <ElegantOTA.h>
+#include "soc/rtc_cntl_reg.h"
+#include "soc/soc.h"
+#include "esp_sleep.h"
 
 // Shared state — defined in main.cpp
 extern bool current_input1;
@@ -39,6 +42,17 @@ static String pending_mqtt_user;
 static String pending_mqtt_pass;
 static uint16_t pending_mqtt_port = 1883;
 
+// Brief deep sleep + timer wake. This is the most thorough software-only
+// reset available: on wake the chip restarts from scratch with peripherals
+// AND analog blocks (including the USB-OTG PHY) fully reset — more aggressive
+// than ESP.restart() or RTC SW system reset. The keyboard sees D+/D- collapse
+// during the PHY's reset window and treats it as a USB bus reset.
+static void deepSleepReset() {
+  esp_sleep_enable_timer_wakeup(100 * 1000);   // 100 ms
+  esp_deep_sleep_start();
+  while (true) {}                              // unreachable
+}
+
 // ================================================================
 // Status JSON (also used by mqtt_client)
 // ================================================================
@@ -58,6 +72,9 @@ String getStatusJSON() {
   doc["hid_link_up"]  = hidLinkIsUp();
   doc["usb_mounted"]  = usb.mounted;
   doc["usb_suspended"] = usb.suspended;
+  doc["kb_connected"] = usbHidKeyboardConnected();
+  uint32_t kb_age = usbHidMillisSinceLastReport();
+  if (kb_age != UINT32_MAX) doc["kb_age_ms"] = kb_age;  // omit field = never
   String json;
   serializeJson(doc, json);
   return json;
@@ -205,9 +222,19 @@ void webServerLoop() {
   if (ota_reboot_pending) {
     ota_reboot_pending = false;
     delay(500);              // let the OTA HTTP response flush
-    Log.println("[OTA] complete, restarting");
+    Log.println("[OTA] complete, post-flash recovery sequence");
     usbHidShutdown();        // graceful USB host teardown
     delay(100);
-    ESP.restart();
+    // Step 1: signal SE0 (USB bus reset) directly on D+/D-. Whatever happens
+    // next, the keyboard is now in Default state and ready to re-enumerate.
+    usbHidForceBusReset();
+    // Step 2: ask the RP2350 to drive our RST pin via its wired GPIO. Real
+    // hardware reset, fully cycles the USB-OTG analog PHY. No-op if the
+    // wire mod isn't installed.
+    hidLinkSendResetRequest();
+    delay(500);              // give the RP2350 time to actually pull RST low
+    // Step 3: software fallback if the wire mod isn't installed.
+    Log.println("[OTA] hardware reset didn't fire, falling back to deep sleep");
+    deepSleepReset();        // does not return
   }
 }

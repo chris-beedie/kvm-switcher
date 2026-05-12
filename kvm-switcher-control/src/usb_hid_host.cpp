@@ -28,11 +28,13 @@
 #include "hid_host.h"
 #include "hid_usage_keyboard.h"
 #include "driver/periph_ctrl.h"
+#include "driver/gpio.h"
 #include "soc/periph_defs.h"
 
 // ── Module state ──────────────────────────────────────────────────────────────
 static QueueHandle_t hid_event_queue   = nullptr;
 static volatile bool keyboard_present  = false;
+static volatile uint32_t last_report_ms = 0;   // 0 = never received a report
 static bool          hotkey_active     = false;
 static void (*switch_callback)()       = nullptr;
 
@@ -79,6 +81,8 @@ static bool processReport(const uint8_t* report) {
 // ── HID report callback (boot-protocol keyboard) ─────────────────────────────
 static void hid_keyboard_report_callback(const uint8_t* data, int length) {
     if (length < 8) return;
+    last_report_ms = millis();
+    if (last_report_ms == 0) last_report_ms = 1;  // 0 reserved for "never"
     if (processReport(data)) hidLinkSendKeyboard(data);
 }
 
@@ -182,11 +186,16 @@ static void hid_event_task(void* arg) {
 // ── Public API ───────────────────────────────────────────────────────────────
 void setupUSBHost() {
     // ESP.restart() (and OTA-triggered restart) is a CPU-only soft reset, so
-    // the USB-OTG controller keeps whatever state it had before the reboot.
-    // usb_host_install() then can't bring up enumeration cleanly and the
-    // keyboard stays dead until a full power cycle. Force-reset the
-    // peripheral here so a soft reboot behaves like a cold boot.
-    periph_module_reset(PERIPH_USB_MODULE);
+    // the USB-OTG controller keeps whatever state it had before the reboot
+    // and the connected keyboard never sees VBUS drop (its 5V comes from the
+    // RP2350 rail, not the ESP32's USB-C). Without intervention the keyboard
+    // stays in its previous "configured" state and the device stays dead
+    // until a physical replug. periph_module_disable + enable asserts reset
+    // and gates the module clock — more thorough than periph_module_reset's
+    // pulse — to give the controller a fresh start.
+    periph_module_disable(PERIPH_USB_MODULE);
+    delay(100);
+    periph_module_enable(PERIPH_USB_MODULE);
     delay(50);
 
     Log.println("[USB] starting native USB host");
@@ -232,6 +241,11 @@ bool usbHidKeyboardConnected() {
     return keyboard_present;
 }
 
+uint32_t usbHidMillisSinceLastReport() {
+    if (last_report_ms == 0) return UINT32_MAX;
+    return millis() - last_report_ms;
+}
+
 void usbHidSetSwitchCallback(void (*cb)()) {
     switch_callback = cb;
 }
@@ -248,4 +262,22 @@ void usbHidShutdown() {
     delay(50);
     usb_host_uninstall();
     delay(100);
+}
+
+void usbHidForceBusReset() {
+    // Detach D+/D- from the USB-OTG controller's IO-mux and drive both LOW
+    // as plain GPIOs. The USB spec defines this state (single-ended-zero
+    // for >2.5 us, in practice >=10 ms is conventional) as a bus reset —
+    // any device on the bus is required to return to its Default state.
+    // Doing this before a chip reset gives the keyboard a deterministic
+    // re-enumeration trigger that none of the chip-level resets we've tried
+    // were producing on their own.
+    Log.println("[USB] forcing bus reset (SE0 on D+/D-)");
+    gpio_reset_pin(GPIO_NUM_19);   // D+
+    gpio_reset_pin(GPIO_NUM_20);   // D-
+    pinMode(19, OUTPUT);
+    pinMode(20, OUTPUT);
+    digitalWrite(19, LOW);
+    digitalWrite(20, LOW);
+    delay(20);
 }
