@@ -69,6 +69,13 @@ void runWifiSetup() {
     ESP.restart();
   }
 
+  // Aggressive modem sleep: the radio dozes between DTIM beacons and only
+  // wakes for our own TX or the AP's listen-interval check-in. Cuts idle
+  // current by ~30 mA at the cost of ~100-300 ms latency on the first
+  // packet of a stale-socket exchange, which is invisible at human
+  // timescales (web UI, MQTT, OTA).
+  WiFi.setSleep(WIFI_PS_MAX_MODEM);
+
   Log.printf("[WIFI] connected (%s)\n", WiFi.localIP().toString().c_str());
 }
 

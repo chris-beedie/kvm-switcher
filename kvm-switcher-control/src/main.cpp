@@ -13,6 +13,7 @@
  D5  GPIO6   NeoPixel data
  D6  GPIO43  UART1 TX -> RP2350 RX (D7 / GP1)
  D7  GPIO44  UART1 RX <- RP2350 TX (D6 / GP0)
+ D8  GPIO7   Light button (to GND, INPUT_PULLUP) - HA MQTT event entity
  BOOT GPIO0  Debug button (built-in)
  USB-C GPIO19/20  USB-OTG HOST — keyboard plugs in via USB-A breakout
  5V pin       Powered FROM RP2350 5V/VBUS pin
@@ -50,6 +51,7 @@
 #define NEOPIXEL_PIN   6   // NeoPixel data
 #define LINK_TX_PIN   43   // D6 — UART1 TX to RP2350
 #define LINK_RX_PIN   44   // D7 — UART1 RX from RP2350
+#define LIGHT_BTN_PIN  7   // D8 — Light button (HA event entity)
 #define DEBUG_BTN_PIN  0   // BOOT button — sends 'b' for HID pipeline test
 
 #define LED_COUNT      1
@@ -58,6 +60,7 @@
 #define BTN_DEBOUNCE_MS        200
 #define BTN_LONG_PRESS_MS      3000    // hold ≥ this and release → reboot
 #define BTN_FACTORY_RESET_MS   10000   // hold ≥ this and release → wipe creds
+#define LIGHT_BTN_LONG_MS      800     // hold ≥ this → long_press event
 #define WAKE_PENDING_MS        2000    // window after wake-tap to retap-switch
 #define MONITOR_POLL_AWAKE_MS  5000
 #define MONITOR_POLL_ASLEEP_MS 30000
@@ -99,6 +102,11 @@ unsigned long last_btn_action = 0;
 int           btn_threshold   = 0;     // 0 = none, 1 = >=3s, 2 = >=10s (LED feedback only)
 bool          dbg_btn_pressed = false;
 
+// Light button (publishes short_press/long_press to MQTT for HA event entity)
+bool          light_btn_pressed     = false;
+unsigned long light_btn_press_start = 0;
+bool          light_btn_long_fired  = false;
+
 // === Wake-pending state ===
 // While monitors are asleep, the first tap "arms" wake mode for WAKE_PENDING_MS
 // instead of doing a normal switch. A second tap during that window toggles
@@ -113,7 +121,8 @@ unsigned long monitor_off_since = 0;
 unsigned long last_monitor_poll = 0;
 
 // === Link state (one-shot logging when link transitions) ===
-bool link_was_up = false;
+bool link_was_up    = false;
+bool usb_mounted_was = false;
 
 // === Forward declarations ===
 void setLED(uint32_t colour);
@@ -121,6 +130,7 @@ void flashLED(uint32_t colour, int times, int ms);
 void doSwitch(const char* source);
 void handleButton();
 void handleDebugButton();
+void handleLightButton();
 void checkMonitorSleep();
 void handleWakePending();
 void fireWakeSequence();
@@ -129,10 +139,14 @@ uint32_t idleLEDColour();
 uint32_t inputColour() { return current_input1 ? COL_TEAL : COL_PURPLE; }
 
 // Default LED colour when nothing is actively painting it (no DDC/wake/etc).
-// During wake-pending we keep showing input colour so the user can see which
-// input the upcoming wake will target.
+// Light up if any of: monitors are awake, the host PC reports our USB device
+// is mounted (RP2350-side), or we're in the wake-pending window. The USB
+// branch makes the LED responsive to "the laptop is alive" much sooner than
+// waiting for the next DDC monitor poll.
 uint32_t idleLEDColour() {
-  if (monitors_awake || wake_pending) return inputColour();
+  if (monitors_awake || wake_pending || hidLinkUsbStatus().mounted) {
+    return inputColour();
+  }
   return COL_OFF;
 }
 
@@ -147,10 +161,11 @@ void setup() {
   hidLinkBegin(LINK_TX_PIN, LINK_RX_PIN);    // up before any Log.print so logs reach RP2350
 
   delay(200);
-  Log.println("\n=== KVM Switcher (Xiao ESP32-S3) build F ===");
+  Log.println("\n=== KVM Switcher (Xiao ESP32-S3) build H ===");
 
   pinMode(BTN_PIN, INPUT_PULLUP);
   pinMode(DEBUG_BTN_PIN, INPUT_PULLUP);
+  pinMode(LIGHT_BTN_PIN, INPUT_PULLUP);
 
   strip.begin();
   strip.setBrightness(30);
@@ -218,6 +233,7 @@ void loop() {
 
   handleButton();
   handleDebugButton();
+  handleLightButton();
   handleWakePending();
   checkMonitorSleep();
   mqttLoop();
@@ -236,6 +252,17 @@ void loop() {
       Log.println("[LINK] down (no heartbeat from RP2350)");
       flashLED(COL_RED, 2, 80);
     }
+    mqttPublishState();
+  }
+
+  // Track the RP2350's USB-to-PC mount state so the LED follows it without
+  // waiting for the next DDC monitor poll. usbHidStatus is refreshed by
+  // hidLinkLoop() above, which is called via webServerLoop().
+  bool usb_mounted_now = hidLinkUsbStatus().mounted;
+  if (usb_mounted_now != usb_mounted_was) {
+    usb_mounted_was = usb_mounted_now;
+    Log.printf("[USB-PC] %s\n", usb_mounted_now ? "mounted" : "unmounted");
+    setLED(idleLEDColour());
     mqttPublishState();
   }
 
@@ -354,20 +381,57 @@ void handleWakePending() {
   setLED(idleLEDColour());
 }
 
-// Send Shift tap + System-Control "Wake Up" tap. Shift wakes S3 USB-host
+// Send Shift hold + System-Control "Wake Up". Shift wakes S3 USB-host
 // resume; the System usage covers laptops that listen for the dedicated
 // Generic Desktop wake event instead of generic HID activity.
+//
+// The Shift is held for 200 ms — some firmware/BIOS wake detectors filter
+// out very short presses, so a longer sustained press is more reliable
+// than a 50 ms tap.
 void fireWakeSequence() {
   const uint8_t shift_down[8] = { 0x02, 0, 0, 0, 0, 0, 0, 0 };  // Left Shift
-  const uint8_t shift_up[8]   = { 0 };
+  const uint8_t empty[8]      = { 0 };
 
+  Log.println("[WAKE] press Left Shift (200 ms)");
   hidLinkSendKeyboard(shift_down);
-  delay(50);
-  hidLinkSendKeyboard(shift_up);
-  delay(80);
+  delay(200);
+  hidLinkSendKeyboard(empty);
+  delay(100);
+
+  Log.println("[WAKE] HID System Control: Wake Up");
   hidLinkSendSystem(HID_SYS_WAKE_UP);
   delay(50);
   hidLinkSendSystem(HID_SYS_RELEASE);
+
+  Log.println("[WAKE] sequence done");
+}
+
+// Light button (D8) — publishes short_press / long_press to MQTT for the HA
+// event entity. Long press fires on threshold (not on release) so a held
+// press gives immediate feedback; short press fires on release only if
+// long press hasn't already fired.
+void handleLightButton() {
+  bool pressed = (digitalRead(LIGHT_BTN_PIN) == LOW);
+
+  if (pressed && !light_btn_pressed) {
+    light_btn_pressed     = true;
+    light_btn_press_start = millis();
+    light_btn_long_fired  = false;
+  } else if (pressed && light_btn_pressed && !light_btn_long_fired) {
+    if (millis() - light_btn_press_start >= LIGHT_BTN_LONG_MS) {
+      light_btn_long_fired = true;
+      Log.println(">>> light button long_press");
+      flashLED(COL_AMBER, 1, 60);
+      mqttPublishLightButtonEvent("long_press");
+    }
+  } else if (!pressed && light_btn_pressed) {
+    light_btn_pressed = false;
+    unsigned long held = millis() - light_btn_press_start;
+    if (!light_btn_long_fired && held > 50) {
+      Log.println(">>> light button short_press");
+      mqttPublishLightButtonEvent("short_press");
+    }
+  }
 }
 
 // Debug BOOT button — sends 'b' down the link to verify the HID pipeline.

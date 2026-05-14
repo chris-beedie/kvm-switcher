@@ -93,6 +93,26 @@ static void mqttPublishHADiscovery() {
     mqtt.publish((base + "_monitors/config").c_str(), p.c_str(), true);
   }
 
+  // Light button event entity — fires on physical button presses so HA
+  // automations can target any light/scene without firmware knowing which.
+  {
+    String base = String("homeassistant/event/") + DEVICE_NAME;
+    String event_topic = String("kvm/") + DEVICE_NAME + "/light_button/event";
+    JsonDocument doc;
+    doc["name"]              = "Light Button";
+    doc["unique_id"]         = String(DEVICE_NAME) + "_light_button";
+    doc["state_topic"]       = event_topic;
+    doc["event_types"][0]    = "short_press";
+    doc["event_types"][1]    = "long_press";
+    doc["availability_topic"]    = avail_topic;
+    doc["payload_available"]     = "online";
+    doc["payload_not_available"] = "offline";
+    JsonObject dev = doc["device"].to<JsonObject>();
+    dev["identifiers"][0] = DEVICE_NAME;
+    String p; serializeJson(doc, p);
+    mqtt.publish((base + "_light_button/config").c_str(), p.c_str(), true);
+  }
+
   mqtt_ha_configured = true;
   Log.println("MQTT: HA discovery published");
 }
@@ -105,6 +125,15 @@ void mqttPublishState() {
   if (!mqtt_enabled || !mqtt.connected()) return;
   String topic = String("kvm/") + DEVICE_NAME + "/state";
   mqtt.publish(topic.c_str(), getStatusJSON().c_str(), true);
+}
+
+void mqttPublishLightButtonEvent(const char* event_type) {
+  if (!mqtt_enabled || !mqtt.connected()) return;
+  String topic = String("kvm/") + DEVICE_NAME + "/light_button/event";
+  JsonDocument doc;
+  doc["event_type"] = event_type;
+  String payload; serializeJson(doc, payload);
+  mqtt.publish(topic.c_str(), payload.c_str(), false);
 }
 
 void setupMQTT() {
